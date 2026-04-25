@@ -1,0 +1,1804 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GC Visualizer — Interactive Garbage Collection Explorer</title>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
+  <style>
+    /* ============================================================
+       DESIGN SYSTEM — Dark Terminal / Memory Inspector Theme
+       ============================================================ */
+    :root {
+      --bg:          #080810;
+      --surface:     #0f0f1c;
+      --surface2:    #16162a;
+      --border:      #252540;
+      --border2:     #32325a;
+      --text:        #c0c0e0;
+      --text-dim:    #5a5a8a;
+      --alive:       #00ff9d;
+      --marked:      #ffaa00;
+      --unreachable: #ff3355;
+      --collected:   #1a1a2e;
+      --root:        #ffe040;
+      --young:       #22aaff;
+      --old:         #bb55ff;
+      --accent:      #00ff9d;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'JetBrains Mono', monospace;
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ---- HEADER ---- */
+    header {
+      padding: 10px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: var(--surface);
+      flex-shrink: 0;
+      position: relative;
+    }
+
+    header::before {
+      content: '';
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, var(--alive)44, transparent 60%);
+    }
+
+    .logo {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .logo h1 {
+      font-family: 'Rajdhani', sans-serif;
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--alive);
+      letter-spacing: 3px;
+      text-transform: uppercase;
+    }
+
+    .logo .sub {
+      font-size: 9px;
+      color: var(--text-dim);
+      letter-spacing: 1.5px;
+    }
+
+    /* ---- TABS ---- */
+    .tabs {
+      display: flex;
+      gap: 3px;
+      margin-left: auto;
+    }
+
+    .tab {
+      padding: 6px 14px;
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+      cursor: pointer;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-dim);
+      transition: all 0.15s;
+      letter-spacing: 0.5px;
+      position: relative;
+    }
+    .tab:hover { color: var(--text); border-color: var(--border2); }
+    .tab.active { background: var(--alive); color: #001a0a; border-color: var(--alive); font-weight: 700; }
+    .tab.active-ms { background: var(--marked); color: #1a0e00; border-color: var(--marked); font-weight: 700; }
+    .tab.active-gen { background: var(--young); color: #001020; border-color: var(--young); font-weight: 700; }
+
+    /* ---- LAYOUT ---- */
+    .main {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* ---- CANVAS AREA ---- */
+    .canvas-wrap {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+      background: var(--bg);
+    }
+
+    canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      cursor: grab;
+    }
+    canvas:active { cursor: grabbing; }
+
+    .canvas-badge {
+      position: absolute;
+      top: 12px; left: 14px;
+      font-size: 9px;
+      color: var(--text-dim);
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      pointer-events: none;
+    }
+
+    /* Legend */
+    .legend {
+      position: absolute;
+      top: 12px; right: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      pointer-events: none;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 9px;
+      color: var(--text-dim);
+      letter-spacing: 0.5px;
+    }
+    .l-dot {
+      width: 9px; height: 9px;
+      border-radius: 2px;
+      border: 1px solid;
+    }
+
+    /* Step indicator */
+    #stepIndicator {
+      position: absolute;
+      bottom: 14px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--surface);
+      border: 1px solid var(--border2);
+      padding: 7px 18px;
+      font-size: 11px;
+      color: var(--alive);
+      letter-spacing: 1px;
+      display: none;
+      white-space: nowrap;
+      box-shadow: 0 0 20px #00ff9d22;
+    }
+
+    /* ---- SIDEBAR ---- */
+    .sidebar {
+      width: 300px;
+      flex-shrink: 0;
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      background: var(--surface);
+      overflow: hidden;
+    }
+
+    /* Stats row */
+    .stats {
+      display: flex;
+      padding: 10px 14px;
+      gap: 0;
+      background: var(--surface2);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .stat {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 3px;
+      border-right: 1px solid var(--border);
+    }
+    .stat:last-child { border-right: none; }
+    .stat-lbl { font-size: 8px; color: var(--text-dim); letter-spacing: 1.5px; text-transform: uppercase; }
+    .stat-val { font-size: 18px; font-weight: 700; line-height: 1; }
+
+    /* Controls */
+    .controls {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .sec-title {
+      font-size: 9px;
+      color: var(--text-dim);
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .sec-title::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+
+    .btn-row { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 7px; }
+
+    .btn {
+      padding: 5px 10px;
+      font-size: 10px;
+      font-family: 'JetBrains Mono', monospace;
+      cursor: pointer;
+      border: 1px solid;
+      background: transparent;
+      transition: all 0.12s;
+      letter-spacing: 0.3px;
+      white-space: nowrap;
+    }
+    .btn:hover { filter: brightness(1.3); }
+    .btn:active { transform: scale(0.97); }
+    .btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+    .btn-g  { color: var(--alive);       border-color: var(--alive); }
+    .btn-g:hover  { background: var(--alive); color: #001a0a; }
+    .btn-r  { color: var(--unreachable); border-color: var(--unreachable); }
+    .btn-r:hover  { background: var(--unreachable); color: #fff; }
+    .btn-o  { color: var(--marked);      border-color: var(--marked); }
+    .btn-o:hover  { background: var(--marked); color: #1a0e00; }
+    .btn-b  { color: var(--young);       border-color: var(--young); }
+    .btn-b:hover  { background: var(--young); color: #001020; }
+    .btn-p  { color: var(--old);         border-color: var(--old); }
+    .btn-p:hover  { background: var(--old); color: #fff; }
+    .btn-y  { color: var(--root);        border-color: var(--root); }
+    .btn-y:hover  { background: var(--root); color: #1a1400; }
+
+    .sel-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 5px;
+    }
+    .sel-lbl { font-size: 9px; color: var(--text-dim); white-space: nowrap; width: 30px; }
+
+    select {
+      flex: 1;
+      background: var(--surface2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 4px 6px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+    }
+
+    .speed-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 9px;
+      color: var(--text-dim);
+      margin-top: 8px;
+    }
+    input[type=range] {
+      flex: 1;
+      accent-color: var(--alive);
+      height: 3px;
+    }
+
+    /* Log */
+    .log-wrap {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px 12px;
+    }
+    .log-title {
+      font-size: 9px;
+      color: var(--text-dim);
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      padding: 8px 14px 4px;
+      flex-shrink: 0;
+      border-top: 1px solid var(--border);
+    }
+
+    .log-entry {
+      font-size: 10px;
+      padding: 3px 0;
+      line-height: 1.6;
+      border-bottom: 1px solid var(--border)44;
+      display: flex;
+      gap: 6px;
+    }
+    .l-time { color: var(--text-dim); flex-shrink: 0; }
+    .l-info    .l-msg { color: var(--text); }
+    .l-success .l-msg { color: var(--alive); }
+    .l-warn    .l-msg { color: var(--marked); }
+    .l-error   .l-msg { color: var(--unreachable); }
+    .l-step    .l-msg { color: var(--young); }
+
+    /* Explanation */
+    .exp-wrap { border-top: 1px solid var(--border); flex-shrink: 0; }
+    .exp-hdr {
+      padding: 9px 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      cursor: pointer;
+      font-size: 10px;
+      color: var(--text-dim);
+      transition: color 0.15s;
+      user-select: none;
+    }
+    .exp-hdr:hover { color: var(--text); }
+    .exp-body {
+      padding: 0 14px;
+      font-size: 10px;
+      line-height: 1.9;
+      color: var(--text-dim);
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.3s ease, padding 0.3s ease;
+    }
+    .exp-body.open { max-height: 200px; padding: 10px 14px; overflow-y: auto; }
+    .exp-body h4 { color: var(--alive); margin-bottom: 6px; font-size: 11px; }
+    .exp-body p  { margin-bottom: 6px; }
+    .hi { color: var(--marked); }
+    .co { color: var(--young); }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 3px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+  </style>
+</head>
+<body>
+
+<!-- ============================================================
+     HEADER
+     ============================================================ -->
+<header>
+  <div class="logo">
+    <h1>⬡ GC Visualizer</h1>
+    <div class="sub">Interactive Garbage Collection Explorer · CS Education Tool</div>
+  </div>
+  <div class="tabs">
+    <button class="tab active" id="tab-rc"  onclick="switchTab('rc')">01 · Ref Counting</button>
+    <button class="tab"        id="tab-ms"  onclick="switchTab('ms')">02 · Mark &amp; Sweep</button>
+    <button class="tab"        id="tab-gen" onclick="switchTab('gen')">03 · Generational</button>
+  </div>
+</header>
+
+<!-- ============================================================
+     MAIN LAYOUT
+     ============================================================ -->
+<div class="main">
+
+  <!-- Canvas -->
+  <div class="canvas-wrap">
+    <canvas id="gc-canvas"></canvas>
+    <div class="canvas-badge" id="canvasBadge">Reference Counting</div>
+    <div class="legend" id="legend">
+      <div class="legend-item"><div class="l-dot" style="background:#00ff9d22;border-color:#00ff9d"></div>Alive</div>
+      <div class="legend-item"><div class="l-dot" style="background:#ffaa0022;border-color:#ffaa00"></div>Marked / Reachable</div>
+      <div class="legend-item"><div class="l-dot" style="background:#ff335522;border-color:#ff3355"></div>Unreachable</div>
+      <div class="legend-item"><div class="l-dot" style="background:#1a1a2e;border-color:#252540"></div>Collected</div>
+      <div class="legend-item"><div class="l-dot" style="background:#ffe04022;border-color:#ffe040"></div>Root (always alive)</div>
+    </div>
+    <div id="stepIndicator">Initializing...</div>
+  </div>
+
+  <!-- Sidebar -->
+  <div class="sidebar">
+
+    <!-- Stats -->
+    <div class="stats">
+      <div class="stat">
+        <span class="stat-lbl">Objects</span>
+        <span class="stat-val" id="s-total" style="color:var(--text)">0</span>
+      </div>
+      <div class="stat">
+        <span class="stat-lbl">Alive</span>
+        <span class="stat-val" id="s-alive" style="color:var(--alive)">0</span>
+      </div>
+      <div class="stat">
+        <span class="stat-lbl">Collected</span>
+        <span class="stat-val" id="s-coll" style="color:var(--unreachable)">0</span>
+      </div>
+      <div class="stat">
+        <span class="stat-lbl">Edges</span>
+        <span class="stat-val" id="s-edges" style="color:var(--young)">0</span>
+      </div>
+    </div>
+
+    <!-- Dynamic controls panel -->
+    <div class="controls" id="controls"></div>
+
+    <!-- Log -->
+    <div class="log-title">▸ Log Output</div>
+    <div class="log-wrap" id="logWrap"></div>
+
+    <!-- Explanation -->
+    <div class="exp-wrap">
+      <div class="exp-hdr" onclick="toggleExp()">
+        <span>📖 Algorithm Explanation</span>
+        <span id="expArrow">▼</span>
+      </div>
+      <div class="exp-body" id="expBody"></div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ============================================================
+     JAVASCRIPT — CORE ENGINE
+     ============================================================ -->
+<script>
+"use strict";
+
+// ================================================================
+// CONSTANTS
+// ================================================================
+
+const NODE_W = 112;   // Node box width
+const NODE_H  = 56;   // Node box height
+const CORNER  = 7;    // Rounded corner radius
+const PROMOTION_THRESHOLD = 2; // Minor GC cycles before promotion
+
+// Colour palette (matches CSS variables)
+const C = {
+  bg:          '#080810',
+  surface:     '#0f0f1c',
+  surface2:    '#16162a',
+  border:      '#252540',
+  text:        '#c0c0e0',
+  dim:         '#5a5a8a',
+  alive:       '#00ff9d',
+  marked:      '#ffaa00',
+  dead:        '#ff3355',
+  collected:   '#1a1a2e',
+  root:        '#ffe040',
+  young:       '#22aaff',
+  old:         '#bb55ff',
+};
+
+// ================================================================
+// STATE
+// Per-algorithm state is isolated so switching tabs doesn't reset work.
+// ================================================================
+
+let activeTab = 'rc';    // 'rc' | 'ms' | 'gen'
+let animating = false;   // Prevents concurrent GC runs
+let animDelay = 600;     // ms between animation steps (user-controlled)
+
+/**
+ * Create a fresh per-algorithm state object.
+ */
+function makeState() {
+  return {
+    nodes: new Map(),   // id (number) -> MemNode
+    edges: [],          // { from, to, highlight }
+    nextId: 1,          // Auto-increment node ID counter
+    totalColl: 0,       // Total objects collected across all GC runs
+    gcCycles: 0         // Number of GC cycles run
+  };
+}
+
+// Separate state objects for each algorithm
+const ST = {
+  rc:  makeState(),
+  ms:  makeState(),
+  gen: makeState()
+};
+
+// ================================================================
+// MEM NODE — Represents one object in the heap
+// ================================================================
+
+class MemNode {
+  /**
+   * @param {number} id     Unique identifier
+   * @param {string} label  Display label
+   * @param {number} x      Canvas X position (centre)
+   * @param {number} y      Canvas Y position (centre)
+   */
+  constructor(id, label, x, y) {
+    this.id    = id;
+    this.label = label;
+    this.x     = x;
+    this.y     = y;
+    this.w     = NODE_W;
+    this.h     = NODE_H;
+
+    // ---- Reference Counting fields ----
+    this.refCount = 0;        // Number of incoming references
+
+    // ---- Mark-and-Sweep fields ----
+    this.marked = false;      // Has this node been marked reachable?
+
+    // ---- Generational GC fields ----
+    this.age        = 0;      // Number of minor GC cycles survived
+    this.generation = 'young'; // 'young' | 'old'
+
+    // ---- Visual state ----
+    // 'alive' | 'marked' | 'unreachable' | 'collected'
+    this.state   = 'alive';
+    this.isRoot  = false;     // Root nodes are always considered reachable
+    this.opacity = 1;         // For fade-out animation
+  }
+
+  /** Returns the display colour for this node's current state. */
+  color() {
+    if (this.isRoot)                  return C.root;
+    if (this.state === 'collected')   return C.collected;
+    if (this.state === 'unreachable') return C.dead;
+    if (this.state === 'marked')      return C.marked;
+    if (this.generation === 'old')    return C.old;
+    return C.alive;
+  }
+}
+
+// ================================================================
+// CANVAS SETUP & RENDER ENGINE
+// ================================================================
+
+const canvas = document.getElementById('gc-canvas');
+const ctx    = canvas.getContext('2d');
+
+/** Resize canvas to fill its container. Called on load and resize. */
+function resizeCanvas() {
+  const wrap = canvas.parentElement;
+  canvas.width  = wrap.clientWidth;
+  canvas.height = wrap.clientHeight;
+  render();
+}
+window.addEventListener('resize', resizeCanvas);
+
+// ---- Continuous render loop ----
+// We only need to re-draw during animations.
+// Interaction events call render() directly.
+function tick() {
+  requestAnimationFrame(tick);
+  if (animating) render();
+}
+tick();
+
+/**
+ * Main render function — clears canvas and redraws everything.
+ */
+function render() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const S = ST[activeTab];
+
+  drawGrid();
+
+  // Draw generation zones for Generational GC
+  if (activeTab === 'gen') drawGenZones();
+
+  // Draw edges (arrows) first so nodes appear on top
+  for (const e of S.edges) {
+    const src = S.nodes.get(e.from);
+    const dst = S.nodes.get(e.to);
+    if (src && dst) drawArrow(src, dst, e.highlight);
+  }
+
+  // Draw nodes
+  for (const node of S.nodes.values()) {
+    drawNode(node);
+  }
+
+  updateStats(S);
+}
+
+/**
+ * Subtle dot-grid background to evoke a "memory space" feel.
+ */
+function drawGrid() {
+  ctx.save();
+  ctx.fillStyle = C.border + '55';
+  const sp = 30;
+  for (let x = 0; x < canvas.width; x += sp)
+    for (let y = 0; y < canvas.height; y += sp) {
+      ctx.beginPath();
+      ctx.arc(x, y, 0.7, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  ctx.restore();
+}
+
+/**
+ * Draw Young / Old generation zones (shaded bands) for Gen GC.
+ */
+function drawGenZones() {
+  const mid = canvas.height * 0.5;
+
+  // Young generation — top half
+  ctx.save();
+  ctx.fillStyle   = C.young + '0b';
+  ctx.strokeStyle = C.young + '30';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([5, 5]);
+  ctx.strokeRect(8, 8, canvas.width - 16, mid - 16);
+  ctx.fillRect(8, 8, canvas.width - 16, mid - 16);
+
+  ctx.font      = '9px JetBrains Mono';
+  ctx.fillStyle = C.young + '99';
+  ctx.fillText('▸ YOUNG GENERATION  (Eden + Survivor Space)', 16, 22);
+  ctx.restore();
+
+  // Old generation — bottom half
+  ctx.save();
+  ctx.fillStyle   = C.old + '0b';
+  ctx.strokeStyle = C.old + '30';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([5, 5]);
+  ctx.strokeRect(8, mid, canvas.width - 16, canvas.height - mid - 8);
+  ctx.fillRect(8, mid, canvas.width - 16, canvas.height - mid - 8);
+
+  ctx.font      = '9px JetBrains Mono';
+  ctx.fillStyle = C.old + '99';
+  ctx.fillText('▸ OLD GENERATION  (Tenured Space)', 16, mid + 14);
+  ctx.restore();
+}
+
+/**
+ * Draw a single memory node as a labelled rounded rectangle.
+ * Includes algorithm-specific metadata (ref count, mark status, age).
+ */
+function drawNode(node) {
+  if (node.state === 'collected' && node.opacity <= 0) return;
+
+  ctx.save();
+  ctx.globalAlpha = node.opacity;
+
+  const { x, y, w, h } = node;
+  const col = node.color();
+
+  // ---- Glow / shadow ----
+  if (node.state !== 'collected') {
+    ctx.shadowColor = col;
+    ctx.shadowBlur  = (node.state === 'marked' || node.isRoot) ? 18 : 7;
+  }
+
+  // ---- Background fill ----
+  ctx.fillStyle = C.surface;
+  roundRect(ctx, x - w/2, y - h/2, w, h, CORNER);
+  ctx.fill();
+
+  // ---- Border ----
+  ctx.strokeStyle = col;
+  ctx.lineWidth   = node.state === 'marked' ? 2.5 : 1.5;
+  ctx.shadowBlur  = 0;
+  roundRect(ctx, x - w/2, y - h/2, w, h, CORNER);
+  ctx.stroke();
+
+  // ---- ROOT badge ----
+  if (node.isRoot) {
+    ctx.fillStyle = C.root;
+    ctx.font      = 'bold 8px JetBrains Mono';
+    ctx.textAlign = 'center';
+    ctx.fillText('◆ ROOT', x, y - h/2 - 6);
+  }
+
+  // ---- Label (top line) ----
+  ctx.fillStyle    = node.state === 'collected' ? C.dim : col;
+  ctx.font         = 'bold 11px JetBrains Mono';
+  ctx.textAlign    = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.shadowBlur   = 0;
+  ctx.fillText(node.label, x, y - 9);
+
+  // ---- ID (middle line) ----
+  ctx.fillStyle = C.dim;
+  ctx.font      = '9px JetBrains Mono';
+  ctx.fillText(`#${node.id}`, x, y + 4);
+
+  // ---- Algorithm-specific info (bottom line) ----
+  if (activeTab === 'rc') {
+    const rcCol = (!node.isRoot && node.refCount === 0) ? C.dead : C.dim;
+    ctx.fillStyle = rcCol;
+    ctx.fillText(`refs: ${node.isRoot ? '∞' : node.refCount}`, x, y + 16);
+  } else if (activeTab === 'ms') {
+    ctx.fillStyle = node.marked ? C.marked : C.dim;
+    ctx.fillText(node.marked ? '● marked' : '○ unmarked', x, y + 16);
+  } else if (activeTab === 'gen') {
+    const gc = node.generation === 'old' ? C.old : C.young;
+    ctx.fillStyle = gc;
+    ctx.fillText(`age:${node.age}  ${node.generation.toUpperCase()[0]}`, x, y + 16);
+  }
+
+  ctx.restore();
+}
+
+/**
+ * Draw a curved arrow from node src to node dst.
+ * Uses a quadratic bezier so parallel edges don't overlap perfectly.
+ *
+ * @param {MemNode}  src
+ * @param {MemNode}  dst
+ * @param {boolean}  highlight - Draw in accent colour when true
+ */
+function drawArrow(src, dst, highlight) {
+  if (src.state === 'collected' || dst.state === 'collected') return;
+
+  ctx.save();
+  ctx.globalAlpha = Math.min(src.opacity, dst.opacity) * 0.9;
+
+  // Edge points on the node border
+  const p1 = edgePoint(src, dst);
+  const p2 = edgePoint(dst, src);
+
+  // Slight perpendicular offset for the bezier control point
+  const dx = p2.x - p1.x, dy = p2.y - p1.y;
+  const mx = (p1.x + p2.x) / 2 + dy * 0.18;
+  const my = (p1.y + p2.y) / 2 - dx * 0.18;
+
+  ctx.strokeStyle = highlight ? C.marked  : C.border + 'cc';
+  ctx.lineWidth   = highlight ? 2         : 1.5;
+
+  ctx.beginPath();
+  ctx.moveTo(p1.x, p1.y);
+  ctx.quadraticCurveTo(mx, my, p2.x, p2.y);
+  ctx.stroke();
+
+  // Arrowhead
+  const angle = Math.atan2(p2.y - my, p2.x - mx);
+  const AL = 9;
+  ctx.fillStyle = highlight ? C.marked : C.border + 'cc';
+  ctx.beginPath();
+  ctx.moveTo(p2.x, p2.y);
+  ctx.lineTo(p2.x - AL * Math.cos(angle - 0.42), p2.y - AL * Math.sin(angle - 0.42));
+  ctx.lineTo(p2.x - AL * Math.cos(angle + 0.42), p2.y - AL * Math.sin(angle + 0.42));
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.restore();
+}
+
+/**
+ * Compute the point on node `from`'s bounding box that faces `to`.
+ */
+function edgePoint(from, to) {
+  const dx = to.x - from.x, dy = to.y - from.y;
+  const angle = Math.atan2(dy, dx);
+  const hw = from.w / 2, hh = from.h / 2;
+  const t  = Math.min(Math.abs(hw / Math.cos(angle)), Math.abs(hh / Math.sin(angle)));
+  return { x: from.x + t * Math.cos(angle), y: from.y + t * Math.sin(angle) };
+}
+
+/** Helper: draw a rounded rectangle path. */
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y,     x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x,     y + h, r);
+  ctx.arcTo(x,     y + h, x,     y,     r);
+  ctx.arcTo(x,     y,     x + w, y,     r);
+  ctx.closePath();
+}
+
+// ================================================================
+// LOG SYSTEM
+// ================================================================
+
+/**
+ * Append a log entry to the sidebar log.
+ * @param {string} msg   The message text
+ * @param {string} type  'info' | 'success' | 'warn' | 'error' | 'step'
+ */
+function log(msg, type = 'info') {
+  const wrap = document.getElementById('logWrap');
+  const now  = new Date();
+  const ts   = `${now.getMinutes().toString().padStart(2,'0')}:${now.getSeconds().toString().padStart(2,'0')}`;
+
+  const div = document.createElement('div');
+  div.className = `log-entry l-${type}`;
+  div.innerHTML = `<span class="l-time">[${ts}]</span><span class="l-msg">${msg}</span>`;
+  wrap.insertBefore(div, wrap.firstChild);
+
+  // Limit log to 60 lines to prevent excessive DOM growth
+  while (wrap.children.length > 60) wrap.removeChild(wrap.lastChild);
+}
+
+// ================================================================
+// STATS BAR
+// ================================================================
+
+function updateStats(S) {
+  const nodes  = [...S.nodes.values()];
+  const alive  = nodes.filter(n => n.state !== 'collected').length;
+  const edges  = S.edges.filter(e => {
+    const s = S.nodes.get(e.from), d = S.nodes.get(e.to);
+    return s?.state !== 'collected' && d?.state !== 'collected';
+  }).length;
+
+  document.getElementById('s-total').textContent = nodes.length;
+  document.getElementById('s-alive').textContent = alive;
+  document.getElementById('s-coll').textContent  = S.totalColl;
+  document.getElementById('s-edges').textContent = edges;
+}
+
+// ================================================================
+// STEP INDICATOR
+// ================================================================
+
+function showStep(msg) {
+  const el = document.getElementById('stepIndicator');
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+
+function hideStep() {
+  document.getElementById('stepIndicator').style.display = 'none';
+}
+
+// ================================================================
+// UTILITY: SLEEP & ANIMATION
+// ================================================================
+
+/** Returns a promise that resolves after `ms` milliseconds. */
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+/** Fade a node out over ~400ms, then mark it fully collected. */
+async function fadeOut(node) {
+  node.state = 'collected';
+  for (let i = 10; i >= 0; i--) {
+    node.opacity = i / 10;
+    render();
+    await sleep(35);
+  }
+  node.opacity = 0;
+  render();
+}
+
+// ================================================================
+// NODE POSITIONING
+// ================================================================
+
+/**
+ * Calculate a canvas position for the next node, arranged in a grid.
+ * For Gen GC, nodes start in the young generation zone (top half).
+ */
+function nextPos(tab) {
+  const S  = ST[tab];
+  const allNodes = [...S.nodes.values()];
+
+  if (tab === 'gen') {
+    // Place in YOUNG generation zone (top half)
+    const midY  = canvas.height * 0.5;
+    const youngNodes = allNodes.filter(n => n.generation === 'young' && n.state !== 'collected');
+    const cols  = Math.max(1, Math.floor((canvas.width - 80) / 150));
+    const idx   = youngNodes.length;
+    return {
+      x: 80 + (idx % cols) * 150,
+      y: 38  + Math.floor(idx / cols) * 90
+    };
+  }
+
+  const cols = Math.max(1, Math.floor((canvas.width - 80) / 155));
+  const idx  = allNodes.length;
+  return {
+    x: 90 + (idx % cols) * 155,
+    y: 70 + Math.floor(idx / cols) * 100
+  };
+}
+
+// ================================================================
+// DRAG-AND-DROP — Users can reposition nodes
+// ================================================================
+
+let dragging = null, dragOX = 0, dragOY = 0;
+
+canvas.addEventListener('mousedown', e => {
+  const S   = ST[activeTab];
+  const r   = canvas.getBoundingClientRect();
+  const mx  = e.clientX - r.left;
+  const my  = e.clientY - r.top;
+
+  for (const node of S.nodes.values()) {
+    if (Math.abs(mx - node.x) < node.w / 2 && Math.abs(my - node.y) < node.h / 2) {
+      dragging = node;
+      dragOX   = mx - node.x;
+      dragOY   = my - node.y;
+      break;
+    }
+  }
+});
+
+canvas.addEventListener('mousemove', e => {
+  if (!dragging) return;
+  const r  = canvas.getBoundingClientRect();
+  dragging.x = e.clientX - r.left - dragOX;
+  dragging.y = e.clientY - r.top  - dragOY;
+  render();
+});
+
+canvas.addEventListener('mouseup',   () => dragging = null);
+canvas.addEventListener('mouseleave',() => dragging = null);
+
+// ================================================================
+// TAB SWITCHING
+// ================================================================
+
+function switchTab(tab) {
+  activeTab = tab;
+  animating = false;
+  hideStep();
+
+  // Update tab styles
+  document.getElementById('tab-rc').className  = 'tab' + (tab === 'rc'  ? ' active'     : '');
+  document.getElementById('tab-ms').className  = 'tab' + (tab === 'ms'  ? ' active-ms'  : '');
+  document.getElementById('tab-gen').className = 'tab' + (tab === 'gen' ? ' active-gen' : '');
+
+  const labels = { rc: 'Reference Counting', ms: 'Mark-and-Sweep', gen: 'Generational GC' };
+  document.getElementById('canvasBadge').textContent = labels[tab];
+
+  buildControls();
+  buildExplanation();
+  render();
+
+  const fullNames = { rc: 'Reference Counting', ms: 'Mark-and-Sweep', gen: 'Generational Garbage Collection' };
+  log(`Switched to: ${fullNames[tab]}`, 'step');
+}
+
+// ================================================================
+// CONTROLS — Dynamically rendered per tab
+// ================================================================
+
+function buildControls() {
+  const p = document.getElementById('controls');
+  if (activeTab === 'rc')  p.innerHTML = rcHTML();
+  if (activeTab === 'ms')  p.innerHTML = msHTML();
+  if (activeTab === 'gen') p.innerHTML = genHTML();
+  refreshSelects();
+}
+
+function nodeOptions(tab) {
+  return [...ST[tab].nodes.values()]
+    .filter(n => n.state !== 'collected')
+    .map(n => `<option value="${n.id}">${n.label} (#${n.id})</option>`)
+    .join('');
+}
+
+/** Rebuild dropdown options when nodes are added/removed. */
+function refreshSelects() {
+  const tab  = activeTab;
+  const opts = nodeOptions(tab);
+  [`${tab}From`, `${tab}To`].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = opts || '<option disabled>— no objects —</option>';
+  });
+}
+
+function selVal(id) { return parseInt(document.getElementById(id)?.value) || null; }
+
+// ---- RC Controls HTML ----
+function rcHTML() {
+  return `
+    <div class="sec-title">Reference Counting</div>
+    <div class="btn-row">
+      <button class="btn btn-g" onclick="rcCreate()">+ Object</button>
+      <button class="btn btn-y" onclick="rcRoot()">+ Root</button>
+      <button class="btn btn-r" onclick="reset('rc')">↺ Reset</button>
+    </div>
+    <div class="sel-row">
+      <span class="sel-lbl">From:</span>
+      <select id="rcFrom"></select>
+    </div>
+    <div class="sel-row">
+      <span class="sel-lbl">To:</span>
+      <select id="rcTo"></select>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-g" onclick="rcAddRef()">+ Add Ref</button>
+      <button class="btn btn-r" onclick="rcDelRef()">– Del Ref</button>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-o" onclick="rcGC()">▶ Run GC</button>
+      <button class="btn btn-r" onclick="rcCircular()">⬡ Circular Demo</button>
+    </div>
+    <div class="speed-row">
+      <span>Slow</span>
+      <input type="range" min="100" max="1400" value="600"
+             oninput="animDelay = 1500 - this.value">
+      <span>Fast</span>
+    </div>`;
+}
+
+// ---- MS Controls HTML ----
+function msHTML() {
+  return `
+    <div class="sec-title">Mark-and-Sweep</div>
+    <div class="btn-row">
+      <button class="btn btn-g" onclick="msCreate()">+ Object</button>
+      <button class="btn btn-y" onclick="msRoot()">+ Root</button>
+      <button class="btn btn-r" onclick="reset('ms')">↺ Reset</button>
+    </div>
+    <div class="sel-row">
+      <span class="sel-lbl">From:</span>
+      <select id="msFrom"></select>
+    </div>
+    <div class="sel-row">
+      <span class="sel-lbl">To:</span>
+      <select id="msTo"></select>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-g" onclick="msAddRef()">+ Add Ref</button>
+      <button class="btn btn-r" onclick="msDelRef()">– Del Ref</button>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-o" onclick="doMark()">① Mark Phase</button>
+      <button class="btn btn-r" onclick="doSweep()">② Sweep Phase</button>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-b" onclick="msFullGC()">▶ Full GC Cycle</button>
+    </div>
+    <div class="speed-row">
+      <span>Slow</span>
+      <input type="range" min="100" max="1400" value="600"
+             oninput="animDelay = 1500 - this.value">
+      <span>Fast</span>
+    </div>`;
+}
+
+// ---- Gen Controls HTML ----
+function genHTML() {
+  return `
+    <div class="sec-title">Generational GC</div>
+    <div class="btn-row">
+      <button class="btn btn-b" onclick="genAllocate()">+ Allocate (Young)</button>
+      <button class="btn btn-y" onclick="genRoot()">+ Root (Old)</button>
+    </div>
+    <div class="sel-row">
+      <span class="sel-lbl">From:</span>
+      <select id="genFrom"></select>
+    </div>
+    <div class="sel-row">
+      <span class="sel-lbl">To:</span>
+      <select id="genTo"></select>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-g" onclick="genAddRef()">+ Add Ref</button>
+      <button class="btn btn-r" onclick="genDelRef()">– Del Ref</button>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-b" onclick="genMinor()">▶ Minor GC (Young)</button>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-p" onclick="genMajor()">▶ Major GC (Full)</button>
+      <button class="btn btn-r" onclick="reset('gen')">↺ Reset</button>
+    </div>
+    <div class="speed-row">
+      <span>Slow</span>
+      <input type="range" min="100" max="1400" value="600"
+             oninput="animDelay = 1500 - this.value">
+      <span>Fast</span>
+    </div>`;
+}
+
+// ================================================================
+// ALGORITHM 1 — REFERENCE COUNTING
+// ================================================================
+/**
+ * HOW IT WORKS:
+ *   Each object keeps a counter of incoming references.
+ *   When a reference is removed, the counter decrements.
+ *   If the counter reaches 0, the object is immediately freed.
+ *
+ * ADVANTAGE:  Immediate, deterministic collection.
+ * LIMITATION: Cannot collect circular references (A → B → A).
+ *
+ * Real-world use: CPython, Swift ARC, Rust Rc<T>/Arc<T>
+ */
+
+function rcCreate() {
+  const S   = ST.rc;
+  const pos = nextPos('rc');
+  const id  = S.nextId++;
+  const n   = new MemNode(id, `Obj_${id}`, pos.x, pos.y);
+  S.nodes.set(id, n);
+  refreshSelects();
+  render();
+  log(`Created Obj_${id}  (refCount: 0)`, 'success');
+}
+
+function rcRoot() {
+  const S   = ST.rc;
+  const pos = nextPos('rc');
+  const id  = S.nextId++;
+  const n   = new MemNode(id, `Root_${id}`, pos.x, pos.y);
+  n.isRoot  = true;
+  n.refCount = 999; // roots are always alive
+  S.nodes.set(id, n);
+  refreshSelects();
+  render();
+  log(`Created ROOT Root_${id} — always reachable`, 'success');
+}
+
+function rcAddRef() {
+  const S    = ST.rc;
+  const fId  = selVal('rcFrom');
+  const tId  = selVal('rcTo');
+  if (!fId || !tId || fId === tId) return log('Select two different objects.', 'warn');
+  if (S.edges.find(e => e.from === fId && e.to === tId)) return log('Reference already exists.', 'warn');
+
+  S.edges.push({ from: fId, to: tId, highlight: false });
+  const dst = S.nodes.get(tId);
+  if (dst) dst.refCount++;
+
+  render();
+  log(`Ref added: ${S.nodes.get(fId)?.label} → ${dst?.label}  (refCount: ${dst?.refCount})`, 'info');
+}
+
+function rcDelRef() {
+  const S   = ST.rc;
+  const fId = selVal('rcFrom');
+  const tId = selVal('rcTo');
+  const idx = S.edges.findIndex(e => e.from === fId && e.to === tId);
+  if (idx === -1) return log('No such reference exists.', 'warn');
+
+  S.edges.splice(idx, 1);
+  const dst = S.nodes.get(tId);
+  if (dst) {
+    dst.refCount = Math.max(0, dst.refCount - 1);
+    if (dst.refCount === 0 && !dst.isRoot) {
+      dst.state = 'unreachable';
+      log(`⚠ ${dst.label} refCount = 0 — will be collected!`, 'error');
+    }
+    log(`Ref removed from ${dst.label}  (refCount now: ${dst.refCount})`, 'warn');
+  }
+  render();
+}
+
+/**
+ * Run Reference Counting GC step-by-step.
+ * Iteratively collects zero-refCount objects and cascades the collection.
+ */
+async function rcGC() {
+  if (animating) return;
+  animating = true;
+  const S = ST.rc;
+
+  log('▶ Reference Counting GC started...', 'step');
+  showStep('Scanning for zero-refCount objects...');
+  await sleep(animDelay);
+
+  // We loop until no more objects can be collected (cascade)
+  let anyCollected = true;
+  let pass = 0;
+
+  while (anyCollected) {
+    anyCollected = false;
+    pass++;
+
+    for (const node of S.nodes.values()) {
+      if (node.state === 'collected') continue;
+      if (node.isRoot) continue;
+
+      // Core RC rule: collect when refCount === 0
+      if (node.refCount === 0) {
+        log(`Pass ${pass}: Collecting ${node.label}  (refCount = 0)`, 'error');
+        showStep(`Collecting ${node.label}...`);
+        node.state = 'unreachable';
+        render();
+        await sleep(animDelay * 0.6);
+
+        // Cascade: decrement refCounts of all targets this node referenced
+        const outgoing = S.edges.filter(e => e.from === node.id);
+        for (const edge of outgoing) {
+          const target = S.nodes.get(edge.to);
+          if (target && !target.isRoot) {
+            target.refCount = Math.max(0, target.refCount - 1);
+            log(`  Cascade: ${target.label} refCount → ${target.refCount}`, 'warn');
+            if (target.refCount === 0) target.state = 'unreachable';
+          }
+        }
+        // Remove all edges touching this node
+        S.edges = S.edges.filter(e => e.from !== node.id && e.to !== node.id);
+
+        await fadeOut(node);
+        S.totalColl++;
+        anyCollected = true;
+      }
+    }
+    render();
+  }
+
+  hideStep();
+  const alive = [...S.nodes.values()].filter(n => n.state !== 'collected').length;
+  log(`✔ RC GC complete. ${alive} objects remaining.`, 'success');
+  animating = false;
+  render();
+}
+
+/**
+ * BONUS: Circular Reference Demo
+ *
+ * Creates two objects A → B → A (a cycle).
+ * Both have refCount = 1, so RC will NEVER collect them
+ * even though neither is reachable from any root.
+ * This demonstrates the fundamental limitation of RC.
+ */
+async function rcCircular() {
+  if (animating) return;
+  animating = true;
+  const S = ST.rc;
+
+  log('⬡ CIRCULAR REFERENCE DEMO — RC Limitation', 'step');
+  log('Creating two isolated objects with no root...', 'info');
+  await sleep(animDelay);
+
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+
+  const idA = S.nextId++, idB = S.nextId++;
+  const A   = new MemNode(idA, 'Circ_A', cx - 100, cy);
+  const B   = new MemNode(idB, 'Circ_B', cx + 100, cy);
+  S.nodes.set(idA, A);
+  S.nodes.set(idB, B);
+  render();
+  await sleep(animDelay);
+
+  // A → B
+  S.edges.push({ from: idA, to: idB, highlight: true });
+  B.refCount++;
+  render();
+  log(`Circ_A → Circ_B  (B.refCount = ${B.refCount})`, 'info');
+  await sleep(animDelay);
+
+  // B → A  (creates the cycle)
+  S.edges.push({ from: idB, to: idA, highlight: true });
+  A.refCount++;
+  render();
+  log(`Circ_B → Circ_A  (A.refCount = ${A.refCount})`, 'info');
+  await sleep(animDelay);
+
+  // Highlight as problematic
+  A.state = 'marked';
+  B.state = 'marked';
+  render();
+
+  log('', 'info');
+  log('⚠ A.refCount = 1, B.refCount = 1 — neither is zero!', 'error');
+  log('⚠ Neither is reachable from any root.', 'error');
+  log('⚠ RC CANNOT collect these → MEMORY LEAK!', 'error');
+  log('💡 Fix: Use Mark-and-Sweep or Cycle Detector (like Python\'s cyclic GC).', 'step');
+
+  showStep('⚠ Circular refs leak — RC cannot collect A or B!');
+  refreshSelects();
+  animating = false;
+  render();
+}
+
+// ================================================================
+// ALGORITHM 2 — MARK AND SWEEP
+// ================================================================
+/**
+ * HOW IT WORKS:
+ *   Phase 1 — MARK:  Starting from all GC roots, do a BFS/DFS
+ *             and mark every reachable object.
+ *   Phase 2 — SWEEP: Scan the entire heap. Collect all unmarked
+ *             (unreachable) objects.
+ *
+ * ADVANTAGE:  Handles circular references correctly!
+ * LIMITATION: "Stop-the-World" pause during collection.
+ *             Can cause heap fragmentation.
+ *
+ * Real-world use: Java (JVM), Go (concurrent tri-colour), JS V8
+ */
+
+function msCreate() {
+  const S   = ST.ms;
+  const pos = nextPos('ms');
+  const id  = S.nextId++;
+  const n   = new MemNode(id, `Obj_${id}`, pos.x, pos.y);
+  S.nodes.set(id, n);
+  refreshSelects();
+  render();
+  log(`Created Obj_${id}`, 'success');
+}
+
+function msRoot() {
+  const S   = ST.ms;
+  const pos = nextPos('ms');
+  const id  = S.nextId++;
+  const n   = new MemNode(id, `Root_${id}`, pos.x, pos.y);
+  n.isRoot  = true;
+  S.nodes.set(id, n);
+  refreshSelects();
+  render();
+  log(`Created ROOT Root_${id} — BFS will start here`, 'success');
+}
+
+function msAddRef() {
+  const S   = ST.ms;
+  const fId = selVal('msFrom');
+  const tId = selVal('msTo');
+  if (!fId || !tId || fId === tId) return log('Select two different objects.', 'warn');
+  if (S.edges.find(e => e.from === fId && e.to === tId)) return log('Reference already exists.', 'warn');
+  S.edges.push({ from: fId, to: tId, highlight: false });
+  render();
+  log(`Ref added: ${S.nodes.get(fId)?.label} → ${S.nodes.get(tId)?.label}`, 'info');
+}
+
+function msDelRef() {
+  const S   = ST.ms;
+  const fId = selVal('msFrom');
+  const tId = selVal('msTo');
+  const idx = S.edges.findIndex(e => e.from === fId && e.to === tId);
+  if (idx === -1) return log('No such reference.', 'warn');
+  S.edges.splice(idx, 1);
+  render();
+  log(`Ref removed: ${S.nodes.get(fId)?.label} → ${S.nodes.get(tId)?.label}`, 'warn');
+}
+
+/**
+ * MARK PHASE — BFS from all root nodes.
+ * Every node reached by the traversal is marked 'reachable'.
+ * Any node NOT visited is later swept.
+ */
+async function doMark() {
+  if (animating) return;
+  animating = true;
+  const S = ST.ms;
+
+  // Reset all marks
+  for (const n of S.nodes.values()) {
+    if (n.state !== 'collected') { n.marked = false; n.state = 'alive'; }
+  }
+  for (const e of S.edges) e.highlight = false;
+  render();
+
+  log('① MARK PHASE: BFS from all roots...', 'step');
+  showStep('Marking reachable objects from roots...');
+  await sleep(animDelay);
+
+  const queue   = [];
+  const visited = new Set();
+
+  // Enqueue all root nodes
+  for (const n of S.nodes.values()) {
+    if (n.isRoot && n.state !== 'collected') {
+      n.marked = true;
+      n.state  = 'marked';
+      visited.add(n.id);
+      queue.push(n.id);
+      log(`  Root enqueued: ${n.label}`, 'warn');
+      render();
+      await sleep(animDelay * 0.4);
+    }
+  }
+
+  // BFS traversal
+  while (queue.length > 0) {
+    const currId = queue.shift();
+    const curr   = S.nodes.get(currId);
+    if (!curr) continue;
+
+    const outEdges = S.edges.filter(e => e.from === currId);
+    for (const edge of outEdges) {
+      const nb = S.nodes.get(edge.to);
+      if (!nb || visited.has(nb.id) || nb.state === 'collected') continue;
+
+      visited.add(nb.id);
+      nb.marked = true;
+      nb.state  = 'marked';
+      edge.highlight = true;
+      queue.push(nb.id);
+
+      log(`  Marked: ${nb.label}  (via ${curr.label})`, 'warn');
+      render();
+      await sleep(animDelay * 0.6);
+      edge.highlight = false;
+    }
+  }
+
+  // Mark unreachable nodes
+  let unreachable = 0;
+  for (const n of S.nodes.values()) {
+    if (!n.marked && n.state !== 'collected') {
+      n.state = 'unreachable';
+      unreachable++;
+    }
+  }
+
+  render();
+  hideStep();
+  log(`✔ Mark phase done. Reachable: ${visited.size}, Unreachable: ${unreachable}`, 'success');
+  animating = false;
+}
+
+/**
+ * SWEEP PHASE — Collect all unmarked objects.
+ * This simulates the GC "reclaiming" memory.
+ */
+async function doSweep() {
+  if (animating) return;
+  animating = true;
+  const S = ST.ms;
+
+  log('② SWEEP PHASE: Reclaiming unmarked objects...', 'step');
+  showStep('Sweeping heap — collecting garbage...');
+  await sleep(animDelay);
+
+  let swept = 0;
+  for (const node of S.nodes.values()) {
+    if (!node.marked && node.state !== 'collected') {
+      log(`  Collecting: ${node.label}  (unreachable)`, 'error');
+      node.state = 'unreachable';
+      render();
+      await sleep(animDelay * 0.5);
+
+      S.edges = S.edges.filter(e => e.from !== node.id && e.to !== node.id);
+      await fadeOut(node);
+      S.totalColl++;
+      swept++;
+    }
+  }
+
+  // Reset marks for next GC cycle
+  for (const n of S.nodes.values()) {
+    if (n.state !== 'collected') { n.marked = false; n.state = 'alive'; }
+  }
+
+  render();
+  hideStep();
+  log(`✔ Sweep complete. Collected: ${swept} objects.`, 'success');
+  animating = false;
+}
+
+/** Run a full Mark-and-Sweep GC cycle (mark then sweep). */
+async function msFullGC() {
+  await doMark();
+  await sleep(animDelay * 0.5);
+  await doSweep();
+}
+
+// ================================================================
+// ALGORITHM 3 — GENERATIONAL GARBAGE COLLECTION
+// ================================================================
+/**
+ * GENERATIONAL HYPOTHESIS: Most objects die young.
+ *
+ * Memory is split into:
+ *   Young Generation (Eden + Survivor) — New allocations go here.
+ *   Old  Generation  (Tenured)         — Long-lived objects go here.
+ *
+ * Minor GC: Quickly collect just the young generation.
+ *           Surviving objects have their age incremented.
+ *           Objects ≥ PROMOTION_THRESHOLD are promoted to Old Gen.
+ *
+ * Major GC: Full heap collection (rare but thorough).
+ *
+ * Real-world use: Java HotSpot JVM, V8 (Orinoco), .NET CLR
+ */
+
+function genAllocate() {
+  const S   = ST.gen;
+  const pos = nextPos('gen');
+  const id  = S.nextId++;
+  const n   = new MemNode(id, `Obj_${id}`, pos.x, pos.y);
+  n.generation = 'young';
+  S.nodes.set(id, n);
+  refreshSelects();
+  render();
+  log(`Allocated Obj_${id} in YOUNG generation`, 'info');
+}
+
+function genRoot() {
+  const S   = ST.gen;
+  const mid = canvas.height * 0.5;
+  const id  = S.nextId++;
+  // Count existing old-gen nodes for positioning
+  const oldNodes = [...S.nodes.values()].filter(n => n.generation === 'old' && n.state !== 'collected');
+  const cols = Math.max(1, Math.floor((canvas.width - 80) / 155));
+  const pos  = {
+    x: 90 + (oldNodes.length % cols) * 155,
+    y: mid + 55 + Math.floor(oldNodes.length / cols) * 90
+  };
+
+  const n   = new MemNode(id, `Root_${id}`, pos.x, pos.y);
+  n.isRoot  = true;
+  n.generation = 'old';
+  S.nodes.set(id, n);
+  refreshSelects();
+  render();
+  log(`Created ROOT Root_${id} in OLD generation`, 'success');
+}
+
+function genAddRef() {
+  const S   = ST.gen;
+  const fId = selVal('genFrom');
+  const tId = selVal('genTo');
+  if (!fId || !tId || fId === tId) return log('Select two different objects.', 'warn');
+  if (S.edges.find(e => e.from === fId && e.to === tId)) return log('Reference already exists.', 'warn');
+  S.edges.push({ from: fId, to: tId, highlight: false });
+  const dst = S.nodes.get(tId);
+  if (dst) dst.refCount++;
+  render();
+  log(`Ref added: ${S.nodes.get(fId)?.label} → ${dst?.label}`, 'info');
+}
+
+function genDelRef() {
+  const S   = ST.gen;
+  const fId = selVal('genFrom');
+  const tId = selVal('genTo');
+  const idx = S.edges.findIndex(e => e.from === fId && e.to === tId);
+  if (idx === -1) return log('No such reference.', 'warn');
+  S.edges.splice(idx, 1);
+  const dst = S.nodes.get(tId);
+  if (dst) dst.refCount = Math.max(0, dst.refCount - 1);
+  render();
+  log(`Ref removed: ${S.nodes.get(fId)?.label} → ${dst?.label}`, 'warn');
+}
+
+/**
+ * BFS from all roots (and old-gen objects, which are always retained).
+ * Returns a Set of reachable node IDs.
+ */
+function reachableNodes(S) {
+  const reachable = new Set();
+  const queue     = [];
+
+  for (const n of S.nodes.values()) {
+    if (n.state === 'collected') continue;
+    // Seeds: root nodes and old-gen nodes act as GC roots for young gen
+    if (n.isRoot || n.generation === 'old') {
+      reachable.add(n.id);
+      queue.push(n.id);
+    }
+  }
+
+  while (queue.length > 0) {
+    const currId = queue.shift();
+    for (const edge of S.edges.filter(e => e.from === currId)) {
+      const nb = S.nodes.get(edge.to);
+      if (nb && !reachable.has(nb.id) && nb.state !== 'collected') {
+        reachable.add(nb.id);
+        queue.push(nb.id);
+      }
+    }
+  }
+
+  return reachable;
+}
+
+/**
+ * Promote a node from Young to Old generation.
+ * Repositions it in the Old generation zone on canvas.
+ */
+async function promote(node, S) {
+  const mid      = canvas.height * 0.5;
+  const oldNodes = [...S.nodes.values()].filter(n => n.generation === 'old' && n.state !== 'collected');
+  const cols     = Math.max(1, Math.floor((canvas.width - 80) / 155));
+  const idx      = oldNodes.length;
+
+  node.generation = 'old';
+  node.x = 90 + (idx % cols) * 155;
+  node.y = mid + 55 + Math.floor(idx / cols) * 90;
+
+  log(`  ⬆ Promoted ${node.label} to OLD generation  (age: ${node.age})`, 'step');
+  render();
+  await sleep(animDelay * 0.5);
+}
+
+/**
+ * MINOR GC — collect only the YOUNG generation.
+ * This simulates a fast, frequent minor collection (e.g., Eden space GC).
+ */
+async function genMinor() {
+  if (animating) return;
+  animating = true;
+  const S   = ST.gen;
+  S.gcCycles++;
+
+  log(`▶ MINOR GC #${S.gcCycles} — Young generation only...`, 'step');
+  showStep(`Minor GC cycle #${S.gcCycles}...`);
+  await sleep(animDelay);
+
+  const reachable = reachableNodes(S);
+  let collected = 0, promoted = 0;
+
+  for (const node of S.nodes.values()) {
+    if (node.state === 'collected' || node.generation !== 'young') continue;
+
+    if (!reachable.has(node.id)) {
+      // Young object is unreachable — collect it immediately
+      log(`  Collecting young: ${node.label}  (unreachable)`, 'error');
+      node.state = 'unreachable';
+      render();
+      await sleep(animDelay * 0.4);
+      S.edges = S.edges.filter(e => e.from !== node.id && e.to !== node.id);
+      await fadeOut(node);
+      S.totalColl++;
+      collected++;
+    } else {
+      // Survived this GC cycle — increment age
+      node.age++;
+      log(`  ${node.label} survived  (age: ${node.age})`, 'info');
+
+      // Promote to old generation if it's old enough
+      if (node.age >= PROMOTION_THRESHOLD) {
+        await promote(node, S);
+        promoted++;
+      }
+    }
+  }
+
+  render();
+  hideStep();
+  log(`✔ Minor GC done. Collected: ${collected}, Promoted: ${promoted}`, 'success');
+  refreshSelects();
+  animating = false;
+}
+
+/**
+ * MAJOR GC — collect BOTH young and old generations.
+ * Simulates a "Stop-the-World" full heap collection.
+ */
+async function genMajor() {
+  if (animating) return;
+  animating = true;
+  const S = ST.gen;
+
+  log('▶ MAJOR GC — Full heap collection (Stop-the-World)...', 'step');
+  showStep('Major GC: Full heap scan — program paused!');
+  await sleep(animDelay);
+
+  const reachable = reachableNodes(S);
+  let collected = 0;
+
+  for (const node of S.nodes.values()) {
+    if (node.state === 'collected' || node.isRoot) continue;
+
+    if (!reachable.has(node.id)) {
+      log(`  Collecting (${node.generation}): ${node.label}`, 'error');
+      node.state = 'unreachable';
+      render();
+      await sleep(animDelay * 0.35);
+      S.edges = S.edges.filter(e => e.from !== node.id && e.to !== node.id);
+      await fadeOut(node);
+      S.totalColl++;
+      collected++;
+    } else {
+      node.age++;
+      if (node.generation === 'young' && node.age >= PROMOTION_THRESHOLD) {
+        await promote(node, S);
+      }
+    }
+  }
+
+  render();
+  hideStep();
+  log(`✔ Major GC complete. Total collected: ${collected}.`, 'success');
+  refreshSelects();
+  animating = false;
+}
+
+// ================================================================
+// RESET
+// ================================================================
+
+function reset(tab) {
+  ST[tab] = makeState();
+  animating = false;
+  hideStep();
+  buildControls();
+  render();
+  log(`↺ Reset ${tab.toUpperCase()} state.`, 'warn');
+}
+
+// ================================================================
+// EXPLANATION PANEL
+// ================================================================
+
+const EXPLANATIONS = {
+  rc: `
+    <h4>Reference Counting</h4>
+    <p>Each object holds a <span class="hi">refCount</span> — the number of pointers that refer to it.
+    Adding a reference increments the count; removing one decrements it.
+    When the count hits <span class="hi">zero</span>, the object is freed immediately.</p>
+    <p><span class="co">✔ Pros:</span> Immediate collection, predictable timing, no heap pause, simple to implement.</p>
+    <p><span class="co">✗ Cons:</span> Cannot collect <span class="hi">circular references</span> (A→B→A stays at refCount 1 even if unreachable from any root).
+    Per-assignment overhead. Thread-safe RC (atomic ops) is expensive.</p>
+    <p><span class="hi">Used in:</span> CPython, Swift ARC, Rust Rc&lt;T&gt;/Arc&lt;T&gt;, PHP, COM.</p>
+    <p><span class="hi">Bonus demo:</span> Click ⬡ Circular Demo to see why RC leaks cycles!</p>
+  `,
+  ms: `
+    <h4>Mark-and-Sweep</h4>
+    <p><span class="hi">Phase 1 — Mark:</span> Traverse the object graph starting from all GC roots (stack variables, globals).
+    Every reachable object is marked.</p>
+    <p><span class="hi">Phase 2 — Sweep:</span> Scan the entire heap. Any object that was NOT marked is unreachable
+    and its memory is reclaimed.</p>
+    <p><span class="co">✔ Pros:</span> Correctly handles circular references. No per-assignment overhead.</p>
+    <p><span class="co">✗ Cons:</span> Stop-the-World pause during collection. Memory isn't reclaimed between GC runs.
+    Can cause heap fragmentation.</p>
+    <p><span class="hi">Used in:</span> Java (JVM), Go (concurrent tri-colour mark), JS V8, Lua.</p>
+  `,
+  gen: `
+    <h4>Generational Garbage Collection</h4>
+    <p>Based on the <span class="hi">Generational Hypothesis</span>: most objects die young.
+    The heap is divided into <span class="co">Young</span> (new objects) and <span class="hi">Old</span> (long-lived) generations.</p>
+    <p><span class="hi">Minor GC</span> quickly scans only the young generation — this is fast and frequent.
+    Objects that survive ${PROMOTION_THRESHOLD}+ minor GCs are <span class="co">promoted</span> to old generation.</p>
+    <p><span class="hi">Major GC</span> collects the entire heap (rare, expensive — Stop-the-World).</p>
+    <p><span class="co">✔ Pros:</span> Minor GC is very fast. Efficient for typical OO workloads.</p>
+    <p><span class="co">✗ Cons:</span> Complex implementation. Write barriers needed for old→young pointers. Major GC still pauses.</p>
+    <p><span class="hi">Used in:</span> Java HotSpot, .NET CLR, V8 (Scavenger + Orinoco), Python 3.12+.</p>
+  `
+};
+
+function buildExplanation() {
+  document.getElementById('expBody').innerHTML = EXPLANATIONS[activeTab];
+}
+
+function toggleExp() {
+  const body  = document.getElementById('expBody');
+  const arrow = document.getElementById('expArrow');
+  body.classList.toggle('open');
+  arrow.textContent = body.classList.contains('open') ? '▲' : '▼';
+}
+
+// ================================================================
+// INIT
+// ================================================================
+
+resizeCanvas();
+buildControls();
+buildExplanation();
+log('GC Visualizer ready!', 'step');
+log('💡 Tip: You can drag nodes to rearrange them.', 'info');
+log('💡 Start by clicking "+ Object" or "+ Root".', 'info');
+
+</script>
+
+<!-- ============================================================
+     HOW TO USE — Embedded script for presenter
+     ============================================================
+
+  ===== PRESENTATION SCRIPT =====
+
+  "Today I'll walk you through three fundamental garbage collection
+   techniques used in real programming languages.
+
+   First — Reference Counting [switch to tab 01]:
+     Create a few objects, add references between them.
+     Notice the refCount on each node.
+     When I remove the last reference to an object, its refCount
+     hits zero and it's immediately collected — no waiting!
+     But watch this: [click Circular Demo]
+     Objects A and B point to each other.
+     Both have refCount=1, but neither is reachable from a root.
+     RC cannot collect these — this is a memory leak!
+
+   Second — Mark-and-Sweep [switch to tab 02]:
+     This solves the circular reference problem.
+     I create a graph with some unreachable cycles.
+     Phase 1 — Mark: starting from ROOT, we BFS the graph
+     and paint everything reachable in orange.
+     Phase 2 — Sweep: anything still grey is garbage — gone!
+     This correctly collects cycles, but notice: the program
+     must PAUSE during collection — the 'Stop-the-World' problem.
+
+   Third — Generational GC [switch to tab 03]:
+     Based on a key insight: most objects die young.
+     Young objects live in the blue zone, old in the purple zone.
+     A Minor GC is fast — it only sweeps the young zone.
+     Objects that survive multiple GCs get promoted to old gen.
+     A Major GC sweeps everything, but that's rare.
+     This is exactly how Java's JVM and Google's V8 engine work!"
+
+  ===============================
+-->
+
+</body>
+</html>
